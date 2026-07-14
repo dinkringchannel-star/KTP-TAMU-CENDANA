@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Scanner KTP</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh; padding: 20px; color: #333;
+  }
+  .container {
+    max-width: 720px; margin: 0 auto; background: #fff;
+    border-radius: 16px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,.3);
+  }
+  h1 { text-align: center; color: #4a5fc1; margin-bottom: 20px; font-size: 1.6rem; }
+  .video-wrap {
+    position: relative; width: 100%; background: #000;
+    border-radius: 12px; overflow: hidden; margin-bottom: 16px;
+  }
+  video, canvas { width: 100%; display: block; border-radius: 12px; }
+  .frame-guide {
+    position: absolute; top: 10%; left: 5%; right: 5%; bottom: 10%;
+    border: 2px dashed rgba(255,255,255,.7); border-radius: 8px; pointer-events: none;
+  }
+  .btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+  button {
+    flex: 1; min-width: 120px; padding: 12px 16px; border: none; border-radius: 8px;
+    font-size: 15px; font-weight: 600; cursor: pointer; transition: .2s;
+  }
+  .btn-primary { background: #4a5fc1; color: #fff; }
+  .btn-primary:hover { background: #3a4fa8; }
+  .btn-secondary { background: #e0e0e0; color: #333; }
+  .btn-success { background: #28a745; color: #fff; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .status {
+    padding: 10px; border-radius: 8px; margin-bottom: 12px;
+    font-size: 14px; display: none;
+  }
+  .status.info { background: #e3f2fd; color: #1565c0; display: block; }
+  .status.error { background: #ffebee; color: #c62828; display: block; }
+  .status.success { background: #e8f5e9; color: #2e7d32; display: block; }
+  .progress {
+    width: 100%; height: 8px; background: #eee; border-radius: 4px;
+    overflow: hidden; margin-top: 8px;
+  }
+  .progress-bar {
+    height: 100%; background: linear-gradient(90deg, #4a5fc1, #764ba2);
+    width: 0%; transition: width .3s;
+  }
+  .form-group { margin-bottom: 12px; }
+  label { display: block; font-weight: 600; margin-bottom: 4px; font-size: 13px; color: #555; }
+  input, textarea {
+    width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px;
+    font-size: 14px; font-family: inherit;
+  }
+  input:focus, textarea:focus { outline: none; border-color: #4a5fc1; }
+  .preview-img {
+    width: 100%; border-radius: 8px; margin-bottom: 12px; border: 1px solid #ddd;
+  }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>📸 Scanner KTP</h1>
+
+  <div id="status" class="status"></div>
+
+  <!-- Step 1: Capture -->
+  <div id="step-capture">
+    <div class="video-wrap">
+      <video id="video" autoplay playsinline></video>
+      <div class="frame-guide"></div>
+    </div>
+    <canvas id="canvas" class="hidden"></canvas>
+    <div class="btn-row">
+      <button id="btn-start" class="btn-primary">🎥 Mulai Kamera</button>
+      <button id="btn-capture" class="btn-success" disabled>📷 Foto KTP</button>
+    </div>
+  </div>
+
+  <!-- Step 2: Preview + Edit -->
+  <div id="step-edit" class="hidden">
+    <img id="preview" class="preview-img" alt="Preview KTP">
+    <div class="btn-row">
+      <button id="btn-retake" class="btn-secondary">🔄 Ambil Ulang</button>
+      <button id="btn-scan" class="btn-primary">🔍 Scan Data (OCR)</button>
+    </div>
+    <div id="progress-wrap" class="hidden">
+      <div class="progress"><div id="progress-bar" class="progress-bar"></div></div>
+    </div>
+
+    <form id="form-data" style="margin-top:16px;">
+      <div class="form-group">
+        <label>NIK (16 digit)</label>
+        <input type="text" id="nik" maxlength="16" pattern="\d{16}">
+      </div>
+      <div class="form-group">
+        <label>Nama Lengkap</label>
+        <input type="text" id="nama">
+      </div>
+      <div class="form-group">
+        <label>Alamat</label>
+        <textarea id="alamat" rows="2"></textarea>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div class="form-group">
+          <label>RT</label>
+          <input type="text" id="rt">
+        </div>
+        <div class="form-group">
+          <label>RW</label>
+          <input type="text" id="rw">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Kelurahan</label>
+        <input type="text" id="kelurahan">
+      </div>
+      <div class="form-group">
+        <label>Kecamatan</label>
+        <input type="text" id="kecamatan">
+      </div>
+      <button type="submit" id="btn-submit" class="btn-success" style="width:100%;">
+        💾 Simpan ke Google Sheets
+      </button>
+    </form>
+  </div>
+</div>
+
+<script>
+// ====== KONFIGURASI ======
+// Ganti URL ini dengan URL deployment Google Apps Script Anda
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxkYUKB4ekRTrlyz3yfjPcYgaORp4sBw0bpTP0HA_s4BU8AVOt_g4pPiFuLNOkyEfRf/exec';
+// ==========================
+
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const preview = document.getElementById('preview');
+const statusEl = document.getElementById('status');
+const stepCapture = document.getElementById('step-capture');
+const stepEdit = document.getElementById('step-edit');
+
+let stream = null;
+let imageDataUrl = null;
+
+function showStatus(msg, type='info') {
+  statusEl.className = 'status ' + type;
+  statusEl.innerHTML = msg;
+}
+function clearStatus() { statusEl.className = 'status'; statusEl.innerHTML = ''; }
+
+// Start camera
+document.getElementById('btn-start').onclick = async () => {
+  try {
+    showStatus('Mengakses kamera...', 'info');
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+    });
+    video.srcObject = stream;
+    document.getElementById('btn-capture').disabled = false;
+    clearStatus();
+  } catch (e) {
+    showStatus('Gagal akses kamera: ' + e.message, 'error');
+  }
+};
+
+// Capture photo
+document.getElementById('btn-capture').onclick = () => {
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+  imageDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+  preview.src = imageDataUrl;
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stepCapture.classList.add('hidden');
+  stepEdit.classList.remove('hidden');
+  showStatus('Foto berhasil. Silakan klik "Scan Data" atau edit manual.', 'success');
+};
+
+// Retake
+document.getElementById('btn-retake').onclick = () => {
+  stepEdit.classList.add('hidden');
+  stepCapture.classList.remove('hidden');
+  document.getElementById('btn-start').click();
+  clearStatus();
+};
+
+// OCR Scan
+document.getElementById('btn-scan').onclick = async () => {
+  const progressWrap = document.getElementById('progress-wrap');
+  const progressBar = document.getElementById('progress-bar');
+  progressWrap.classList.remove('hidden');
+  showStatus('Memproses OCR... (butuh beberapa detik)', 'info');
+
+  try {
+    const { data } = await Tesseract.recognize(imageDataUrl, 'ind+eng', {
+      logger: m => {
+        if (m.status === 'recognizing text') {
+          progressBar.style.width = Math.round(m.progress * 100) + '%';
+        }
+      }
+    });
+    const text = data.text;
+    console.log('OCR Result:', text);
+    parseKTP(text);
+    showStatus('✅ Scan selesai. Periksa & edit data jika perlu.', 'success');
+  } catch (e) {
+    showStatus('Error OCR: ' + e.message, 'error');
+  } finally {
+    setTimeout(() => progressWrap.classList.add('hidden'), 500);
+  }
+};
+
+// Parse KTP text with regex
+function parseKTP(text) {
+  const clean = text.replace(/\s+/g, ' ').trim();
+
+  // NIK: 16 digit
+  const nikMatch = clean.match(/\b(\d{16})\b/);
+  if (nikMatch) document.getElementById('nik').value = nikMatch[1];
+
+  // Helper: ambil teks setelah keyword sampai baris berikutnya / keyword lain
+  const after = (key) => {
+    const re = new RegExp(key + '\\s*[:;]?\\s*([^\n]+)', 'i');
+    const m = clean.match(re);
+    return m ? m[1].trim() : '';
+  };
+
+  // Nama
+  const namaMatch = clean.match(/Nama\s*[:;]?\s*([A-Za-z\s'.]+?)(?=\s*(?:Tempat|Tgl|Lahir|Pekerjaan|Agama|Status|Kewargan|Alamat|RT))/i);
+  if (namaMatch) document.getElementById('nama').value = namaMatch[1].trim();
+
+  // Alamat
+  const alamatMatch = clean.match(/Alamat\s*[:;]?\s*([^\n]+?)(?=\s*(?:RT|RW|Kel|Kec|No))/i);
+  if (alamatMatch) document.getElementById('alamat').value = alamatMatch[1].trim();
+
+  // RT/RW
+  const rtRwMatch = clean.match(/RT\s*[/:\s]\s*RW\s*[/:\s]*(\d+)\s*[/\s]*(\d+)/i)
+                 || clean.match(/RT\s*[:;\s]*(\d{1,4})\s*[/\s]*RW\s*[:;\s]*(\d{1,4})/i);
+  if (rtRwMatch) {
+    document.getElementById('rt').value = rtRwMatch[1];
+    document.getElementById('rw').value = rtRwMatch[2];
+  } else {
+    const rtOnly = clean.match(/RT\s*[:;\s]*(\d{1,4})/i);
+    const rwOnly = clean.match(/RW\s*[:;\s]*(\d{1,4})/i);
+    if (rtOnly) document.getElementById('rt').value = rtOnly[1];
+    if (rwOnly) document.getElementById('rw').value = rwOnly[1];
+  }
+
+  // Kelurahan
+  const kelMatch = clean.match(/(?:Kelurahan|Desa)\s*[:;]?\s*([A-Za-z\s]+?)(?=\s*(?:Kecamatan|Kec|Kab|Kota))/i);
+  if (kelMatch) document.getElementById('kelurahan').value = kelMatch[1].trim();
+
+  // Kecamatan
+  const kecMatch = clean.match(/Kecamatan\s*[:;]?\s*([A-Za-z\s]+?)(?=\s*(?:Kabupaten|Kota|Provinsi|Agama|$))/i);
+  if (kecMatch) document.getElementById('kecamatan').value = kecMatch[1].trim();
+}
+
+// Submit to Google Apps Script
+document.getElementById('form-data').onsubmit = async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById('btn-submit');
+  btn.disabled = true; btn.textContent = '⏳ Mengirim...';
+
+  const payload = {
+    nik: document.getElementById('nik').value,
+    nama: document.getElementById('nama').value,
+    alamat: document.getElementById('alamat').value,
+    rt: document.getElementById('rt').value,
+    rw: document.getElementById('rw').value,
+    kelurahan: document.getElementById('kelurahan').value,
+    kecamatan: document.getElementById('kecamatan').value,
+    foto: imageDataUrl,
+    timestamp: new Date().toISOString()
+  };
+
+  try {
+    const res = await fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload)
+    });
+    showStatus('✅ Data berhasil disimpan ke Google Sheets!', 'success');
+    setTimeout(() => {
+      if (confirm('Data tersimpan. Scan KTP baru?')) location.reload();
+    }, 1000);
+  } catch (err) {
+    showStatus('❌ Gagal kirim: ' + err.message, 'error');
+    btn.disabled = false; btn.textContent = '💾 Simpan ke Google Sheets';
+  }
+};
+</script>
+</body>
+</html>
